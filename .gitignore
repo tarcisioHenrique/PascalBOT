@@ -1,0 +1,14 @@
+.# Dependências
+node_modules/
+
+# Arquivos de ambiente (chaves, senhas)
+.env
+
+# Arquivos de sessão do WhatsApp-web.js
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Logs e arquivos temporários
+*.log
+.DS_Store
+Thumbs.db
