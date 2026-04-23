@@ -1,5 +1,14 @@
 const { createClient } = require("@supabase/supabase-js");
-require('dotenv').config();
+require("dotenv").config();
+
+// No topo do arquivo (fora da classe)
+const TEMPO_POR_DIFICULDADE = {
+  facil: 30,
+  medio: 45,
+  dificil: 60,
+  infernal: 90,
+  morte: 120,
+};
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -169,6 +178,66 @@ class DbVerification {
         "Todos os estados resetados com sucesso! Linhas atualizadas: ",
         count,
       );
+    }
+  }
+
+  async obterRanking() {
+    try {
+        // Buscar alunos com campos necessários
+        const { data: alunos, error: errAlunos } = await supabase
+            .from("id_student")
+            .select("username, whatsappNumber, avatar");
+        if (errAlunos) throw errAlunos;
+
+        // Buscar níveis
+        const { data: niveis, error: errNiveis } = await supabase
+            .from("id_lvlprogress")
+            .select("id_aluno, level");
+        if (errNiveis) throw errNiveis;
+
+        // Buscar estatísticas
+        const { data: stats, error: errStats } = await supabase
+            .from("estatisticas_aluno")
+            .select("*");
+        if (errStats) throw errStats;
+
+        const levelMap = new Map();
+        niveis.forEach(n => levelMap.set(n.id_aluno, n.level || 1));
+
+        const statsMap = new Map();
+        stats.forEach(s => statsMap.set(s.whatsappNumber, s));
+
+        const pesos = { facil: 1, medio: 2, dificil: 3, infernal: 5, morte: 8 };
+        const ranking = [];
+
+        for (const aluno of alunos) {
+            if (!aluno.whatsappNumber) {
+                console.log(`Aluno ignorado (sem whatsappNumber): ${aluno.username}`);
+                continue; // pula este
+            }
+            const level = levelMap.get(aluno.whatsappNumber) || 1;
+            const acertos = statsMap.get(aluno.whatsappNumber) || {};
+            const acertosPonderados =
+                (acertos.total_acertos_facil || 0) * pesos.facil +
+                (acertos.total_acertos_medio || 0) * pesos.medio +
+                (acertos.total_acertos_dificil || 0) * pesos.dificil +
+                (acertos.total_acertos_infernal || 0) * pesos.infernal +
+                (acertos.total_acertos_morte || 0) * pesos.morte;
+            const pontuacao = level * 100 + acertosPonderados;
+            ranking.push({
+                username: aluno.username || "Aluno",
+                level: level,
+                pontuacao: pontuacao,
+                whatsappNumber: aluno.whatsappNumber,
+                avatar: aluno.avatar || null
+            });
+        }
+
+        ranking.sort((a, b) => b.pontuacao - a.pontuacao);
+        return ranking;
+    } catch (error) {
+        console.error("Erro em obterRanking:", error);
+        return [];
     }
   }
 }
@@ -354,6 +423,7 @@ class TorreDeVidro {
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     const perguntas = shuffled.slice(0, quantidade);
+
     return { perguntas };
   }
 
@@ -368,9 +438,19 @@ class TorreDeVidro {
     const multiplicador = multiplicadores[dificuldade];
     if (!multiplicador) return { error: "Dificuldade inválida." };
 
+    const qtdPorDificuldade = {
+      facil: 7,
+      medio: 12,
+      dificil: 16,
+      infernal: 20,
+      morte: 25,
+    };
+
+    const quantidade = qtdPorDificuldade[dificuldade] || 7;
+
     const { perguntas, error } = await this.buscarPerguntasPorDificuldade(
       dificuldade,
-      5,
+      quantidade,
     );
     if (error) return { error };
 
@@ -413,8 +493,9 @@ class TorreDeVidro {
       .eq("whatsappNumber", whatsappNumber)
       .single();
 
-    //Debugging
     const dados = estado.dados;
+
+    //Seção de Debugging
     const perguntaAtual = dados.perguntas[dados.indice];
     console.log("Resposta do aluno (bruta):", respostaAluno);
     console.log("Índice atual:", dados.indice);
@@ -424,8 +505,7 @@ class TorreDeVidro {
       return { error: "Pergunta não encontrada." };
     }
     console.log("Pergunta atual:", perguntaAtual.texto);
-
-    //Fim do Debugging
+    //Fim do Debuggins
 
     console.log("Estado retornado:", estado);
     if (error || !estado) {
@@ -460,10 +540,12 @@ class TorreDeVidro {
       dados.coins_acumuladas += perguntaAtual.coins_base;
       mensagem = "✅ Correta!";
     } else {
+      const penalidadeXP = Math.floor(dados.xp_acumulado * 0.15);
+      const penalidadeCoins = Math.floor(dados.coins_acumuladas * 0.15);
       const letras = ["a", "b", "c", "d"];
       const letraCorreta = letras[perguntaAtual.resposta];
       const textoCorreto = perguntaAtual.alternativas[perguntaAtual.resposta];
-      mensagem = `❌ Errada! A correta é ${letraCorreta}) ${textoCorreto}.`;
+      mensagem = `❌ Errada! Perdeu ${penalidadeXP} XP e ${penalidadeCoins} coins.`;
     }
 
     // Avançar índice
@@ -484,13 +566,80 @@ class TorreDeVidro {
         coinsTotal,
         "torre",
       );
+
+      // Contabiliza a quantidade de acertos para as métricas do ranking
+      const dificuldade = dados.dificuldade; // 'facil', 'medio', etc.
+      let campoAcertos;
+      switch (dificuldade) {
+        case "facil":
+          campoAcertos = "total_acertos_facil";
+          break;
+        case "medio":
+          campoAcertos = "total_acertos_medio";
+          break;
+        case "dificil":
+          campoAcertos = "total_acertos_dificil";
+          break;
+        case "infernal":
+          campoAcertos = "total_acertos_infernal";
+          break;
+        case "morte":
+          campoAcertos = "total_acertos_morte";
+          break;
+        default:
+          campoAcertos = null;
+      }
+      if (campoAcertos) {
+        // Incrementa a quantidade de acertos do simulado (dados.acertos)
+        const { error: statsError } = await supabase.rpc(
+          "incrementar_acertos",
+          {
+            p_whatsapp: whatsappNumber,
+            p_campo: campoAcertos,
+            p_quantidade: dados.acertos,
+          },
+        );
+        if (statsError)
+          console.error("Erro ao atualizar estatísticas:", statsError);
+      }
       mensagem += `\n\n🏆 *Simulado concluído!*\nAcertos: ${dados.acertos}/${dados.perguntas.length}\nXP ganho: ${xpTotal}\nJeane Coins: ${coinsTotal}`;
       // Limpar estado (voltar para IDLE)
       await supabase
         .from("estados")
         .update({ estado: "IDLE", dados: {} })
         .eq("whatsappNumber", whatsappNumber);
-      return { terminou: true, mensagem };
+
+      let mensagemFinal = mensagem; // aproveita a mensagem já construída
+      const percentualAcertos = (dados.acertos / dados.perguntas.length) * 100;
+      const dificuldadeAtual = dados.dificuldade;
+
+      // Mapeamento da ordem das dificuldades
+      const ordemDificuldades = [
+        "facil",
+        "medio",
+        "dificil",
+        "infernal",
+        "morte",
+      ];
+      const idxAtual = ordemDificuldades.indexOf(dificuldadeAtual);
+      const proximaDificuldade = ordemDificuldades[idxAtual + 1];
+      let feedback = "";
+
+      if (percentualAcertos >= 75 && proximaDificuldade) {
+        // Libera a próxima dificuldade se a atual tiver sido concluída com >=75%
+        const { error } = await supabase
+          .from("id_lvlprogress")
+          .update({ torre_nivel_max: proximaDificuldade })
+          .eq("id_aluno", whatsappNumber);
+        if (!error) {
+          // opcional: avisar o aluno que nova dificuldade foi liberada
+          feedback += `\n🎉 *Nova dificuldade liberada: ${proximaDificuldade.toUpperCase()}!*`;
+        }
+      }
+
+      if (feedback) mensagemFinal += `\n${feedback}`;
+
+      return { terminou: true, mensagem: mensagemFinal };
     } else {
       // Salvar progresso
       await supabase
