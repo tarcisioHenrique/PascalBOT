@@ -1383,15 +1383,15 @@ Bons estudos! ✨
 client.on("message", async (message) => {
   //Habilitar somente para testes locais
   const numero = await getRealPhoneNumber(message, client);
-  console.log("Número obtido:", numero);
-  const NUMERO_AUTORIZADO = process.env.NUMERO_AUTORIZADO;
-  if (numero !== NUMERO_AUTORIZADO) {
-    console.log("contact: ", numero);
-    message.reply(
-      "Olá, estou em manutenção agora! Por favor, volte mais tarde.",
-    );
-    return; // ignora qualquer mensagem de outros números
-  }
+  // console.log("Número obtido:", numero);
+  // const NUMERO_AUTORIZADO = process.env.NUMERO_AUTORIZADO;
+  // if (numero !== NUMERO_AUTORIZADO) {
+  //   console.log("contact: ", numero);
+  //   message.reply(
+  //     "Olá, estou em manutenção agora! Por favor, volte mais tarde.",
+  //   );
+  //   return; // ignora qualquer mensagem de outros números
+  // }
   // Obtém estado atual do aluno
   const estadoObj = await db.getEstado(numero);
   const estadoAtual = estadoObj?.estado || "IDLE";
