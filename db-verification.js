@@ -38,6 +38,63 @@ async function possuiHabilidade(whatsappNumber, nomeHabilidade) {
 //Base para a exponenciação do nível
 const XP_CONSTANT = 50;
 
+function numeroOuZero(valor) {
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : 0;
+}
+
+function obterMetricasPerfil(perfilConfig = {}) {
+  return perfilConfig.metricas_perfil || {};
+}
+
+async function atualizarMetricasPerfil(whatsappNumber, acertou) {
+  const { data: aluno, error: errAluno } = await supabase
+    .from("id_student")
+    .select("perfil_config")
+    .eq("whatsappNumber", whatsappNumber)
+    .maybeSingle();
+
+  if (errAluno || !aluno) {
+    console.error("Erro ao buscar perfil para atualizar metricas:", errAluno);
+    return null;
+  }
+
+  const perfilConfig = aluno.perfil_config || {};
+  const metricasAtuais = obterMetricasPerfil(perfilConfig);
+  const sequenciaAtual = acertou
+    ? numeroOuZero(metricasAtuais.sequencia_atual) + 1
+    : 0;
+  const maiorSequencia = Math.max(
+    numeroOuZero(metricasAtuais.maior_sequencia),
+    sequenciaAtual,
+  );
+  const totalPerguntas = numeroOuZero(metricasAtuais.total_perguntas) + 1;
+
+  const metricasPerfil = {
+    ...metricasAtuais,
+    sequencia_atual: sequenciaAtual,
+    maior_sequencia: maiorSequencia,
+    total_perguntas: totalPerguntas,
+  };
+
+  const { error: errUpdate } = await supabase
+    .from("id_student")
+    .update({
+      perfil_config: {
+        ...perfilConfig,
+        metricas_perfil: metricasPerfil,
+      },
+    })
+    .eq("whatsappNumber", whatsappNumber);
+
+  if (errUpdate) {
+    console.error("Erro ao atualizar metricas do perfil:", errUpdate);
+    return null;
+  }
+
+  return metricasPerfil;
+}
+
 function obterDataDiaria() {
   // Obtém data/hora atual no fuso de Brasília (America/Sao_Paulo)
   const agora = new Date();
@@ -280,7 +337,7 @@ class DbVerification {
     // Buscar aluno
     const { data: aluno, error: errAluno } = await supabase
       .from("id_student")
-      .select("username, avatar")
+      .select("username, avatar, perfil_config")
       .eq("whatsappNumber", whatsappNumber)
       .maybeSingle(); // ← mude de .single() para .maybeSingle()
 
@@ -292,7 +349,7 @@ class DbVerification {
     // Buscar progresso (também use maybeSingle)
     const { data: progresso, error: errProgress } = await supabase
       .from("id_lvlprogress")
-      .select("level, jeane_coins, torre_nivel_max")
+      .select("level, xp, jeane_coins, torre_nivel_max")
       .eq("id_aluno", whatsappNumber)
       .maybeSingle();
 
@@ -305,21 +362,56 @@ class DbVerification {
       .eq("whatsappNumber", whatsappNumber)
       .maybeSingle();
 
+    if (errProgress) console.error("Erro ao buscar progresso:", errProgress);
+    if (errStats) console.error("Erro ao buscar estatisticas:", errStats);
+
+    const { data: topicos, error: errTopicos } = await supabase
+      .from("estatisticas_topicos")
+      .select("acertos, tentativas")
+      .eq("whatsappNumber", whatsappNumber);
+    if (errTopicos) {
+      console.error("Erro ao buscar estatisticas por topico:", errTopicos);
+    }
+
+    const metricasPerfil = obterMetricasPerfil(aluno.perfil_config || {});
     const totalAcertos =
       (stats?.total_acertos_facil || 0) +
       (stats?.total_acertos_medio || 0) +
       (stats?.total_acertos_dificil || 0) +
       (stats?.total_acertos_infernal || 0) +
       (stats?.total_acertos_morte || 0);
+    const totalPerguntasTopicos = (topicos || []).reduce(
+      (total, item) => total + numeroOuZero(item.tentativas),
+      0,
+    );
+    const totalAcertosTopicos = (topicos || []).reduce(
+      (total, item) => total + numeroOuZero(item.acertos),
+      0,
+    );
+    const totalPerguntas = Math.max(
+      numeroOuZero(metricasPerfil.total_perguntas),
+      totalPerguntasTopicos,
+      totalAcertos,
+      totalAcertosTopicos,
+    );
 
     return {
       username: aluno.username,
       avatar: aluno.avatar,
       level: progresso?.level || 1,
+      xp: progresso?.xp || 0,
       jeane_coins: progresso?.jeane_coins || 0,
       torre_nivel_max: progresso?.torre_nivel_max || "Fácil",
-      total_acertos: totalAcertos,
+      total_acertos: Math.max(totalAcertos, totalAcertosTopicos),
+      total_perguntas: totalPerguntas,
+      sequencia_atual: numeroOuZero(metricasPerfil.sequencia_atual),
+      maior_sequencia: numeroOuZero(metricasPerfil.maior_sequencia),
+      conquistas: numeroOuZero(metricasPerfil.conquistas),
     };
+  }
+
+  async atualizarMetricasPerfil(whatsappNumber, acertou) {
+    return atualizarMetricasPerfil(whatsappNumber, acertou);
   }
 
   async getPerfilConfig(whatsappNumber) {
@@ -904,6 +996,7 @@ class TorreDeVidro {
     if (tempoDecorrido > tempoLimite) {
       dados.vidas--;
       dados.streak = 0;
+      await atualizarMetricasPerfil(whatsappNumber, false);
       if (dados.vidas <= 0) {
         if (dados.vidas <= 0) {
           // Recompensa parcial baseada no andar completado
@@ -998,6 +1091,7 @@ class TorreDeVidro {
     }
 
     let mensagemFeedback = "";
+    await atualizarMetricasPerfil(whatsappNumber, acertou);
     if (acertou) {
       dados.streak++;
       const multiplicador = Math.min(
@@ -1049,6 +1143,7 @@ class TorreDeVidro {
       await this.registrarHistoricoPergunta(whatsappNumber, perguntaAtual.id);
       dados.indicePergunta++;
     } else {
+      dados.streak = 0;
       let perdeVida = true;
       console.log("Verificando Escudo do Erro...");
 

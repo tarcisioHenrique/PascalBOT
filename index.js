@@ -1333,6 +1333,8 @@ async function processarDiaria(message, estadoObj) {
     mensagemFinal = `❌ *Resposta errada!*\nA alternativa correta era *${letraCorreta}) ${textoCorreto}*\n\nNão desanime! Amanhã tem outra chance.`;
   }
 
+  await db.atualizarMetricasPerfil(numero, acertou);
+
   //Atualiza as métricas do banco
   const topico = diariaAtual.topico;
   const { error } = await supabase.rpc("atualizar_estatisticas_topico", {
@@ -2153,6 +2155,15 @@ client.on("message", async (message) => {
 
         break;
       case "/ranking":
+        // Suspensao temporaria ate a premiacao. Mantenha a logica abaixo para reativar depois.
+        const rankingSuspenso = true;
+        if (rankingSuspenso) {
+          await message.reply(
+            "Rank suspenso até a premiação! Você ainda poderá subir na colocação, mas não é possível mais ver.",
+          );
+          break;
+        }
+
         console.log("Entrou no rank");
         try {
           const ranking = await db.obterRanking();

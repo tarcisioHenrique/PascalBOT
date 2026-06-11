@@ -12,3 +12,11 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Builds web
+gincana/dist/
+gincana/
+
+#md
+#*.md
+#plans/
